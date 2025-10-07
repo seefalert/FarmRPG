@@ -1,0 +1,738 @@
+// ==UserScript==
+// @name         Farm RPG Precision Harvest PRO
+// @namespace    http://tampermonkey.net/
+// @version      1.9
+// @description  Улучшенный бот для фермы с ручной покупкой семян и адаптивным интерфейсом
+// @author       Your Name
+// @match        https://farmrpg.com/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    const DEFAULT_SETTINGS = {
+        harvestDelay: 1000,
+        plantDelay: 1000,
+        progressCheckInterval: 10000,
+        selectChangeDelay: 500,
+        maxRetries: 3,
+        minSeedThreshold: 100,
+        buySeedsEnabled: false,
+        panelWidth: 350,
+        panelHeight: 400
+    };
+
+    class PrecisionHarvestBot {
+        constructor() {
+            this.isAutoHarvestEnabled = false;
+            this.selectedCrops = JSON.parse(localStorage.getItem('farmRpgBot_selectedCrops')) || [];
+            this.controlsAdded = false;
+            this.checkInterval = null;
+            this.lastProgress = 0;
+            this.currentRetries = 0;
+            this.isResizing = false;
+            this.isDragging = false;
+            this.settings = {
+                ...DEFAULT_SETTINGS,
+                ...JSON.parse(localStorage.getItem('farmRpgBot_settings')) || {}
+            };
+            this.init();
+        }
+
+        init() {
+            this.addControls();
+            this.loadCropList();
+            this.restorePanelPosition();
+            this.setupEventListeners();
+        }
+
+        addControls() {
+            if (this.controlsAdded) return;
+            this.controlsAdded = true;
+
+            const controls = document.createElement('div');
+            controls.id = 'harvestBotControls';
+            controls.style.position = 'fixed';
+            controls.style.zIndex = '9999';
+            controls.style.background = '#1e1e1e';
+            controls.style.padding = '10px';
+            controls.style.border = '1px solid #444';
+            controls.style.borderRadius = '8px';
+            controls.style.color = '#fff';
+            controls.style.fontFamily = 'Arial, sans-serif';
+            controls.style.width = `${this.settings.panelWidth}px`;
+            controls.style.height = `${this.settings.panelHeight}px`;
+            controls.style.resize = 'both';
+            controls.style.overflow = 'hidden';
+            controls.style.boxSizing = 'border-box';
+            controls.style.userSelect = 'none';
+
+            controls.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h3 style="margin: 0; font-size: 16px; cursor: move;">Precision Harvest Bot PRO</h3>
+                    <div>
+                        <button id="minimizeBtn" style="background: none; border: none; color: #fff; cursor: pointer; font-size: 16px; margin-right: 5px;">−</button>
+                        <button id="closeBtn" style="background: none; border: none; color: #fff; cursor: pointer; font-size: 16px;">×</button>
+                    </div>
+                </div>
+                <div id="controlsContent" style="height: calc(100% - 40px); overflow: hidden; display: flex; flex-direction: column;">
+                    <div style="margin-bottom: 10px; flex-shrink: 0;">
+                        <button id="toggleAutoHarvest" style="width: 100%; background: #555; color: #fff; border: none; padding: 8px; border-radius: 4px; cursor: pointer; margin-bottom: 10px;">
+                            🌾 Auto Harvest
+                        </button>
+                        <button id="buySeedsBtn" style="width: 100%; background: #555; color: #fff; border: none; padding: 8px; border-radius: 4px; cursor: pointer; margin-bottom: 10px;">
+                            🛒 Купить семена (MAX)
+                        </button>
+                    </div>
+                    <div style="margin-bottom: 10px; background: #2a2a2a; padding: 10px; border-radius: 5px; flex-shrink: 0;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <label style="font-weight: bold;">Культуры для выращивания:</label>
+                            <div>
+                                <button id="selectAllCrops" style="margin-right: 5px; background: #555; color: #fff; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">Все</button>
+                                <button id="deselectAllCrops" style="background: #555; color: #fff; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">Ничего</button>
+                            </div>
+                        </div>
+                        <div id="cropListContainer" style="max-height: 150px; overflow-y: auto; margin: 5px 0; border: 1px solid #444; padding: 5px; border-radius: 4px; background: #1e1e1e;"></div>
+                    </div>
+                    <div style="margin-bottom: 10px; background: #2a2a2a; padding: 10px; border-radius: 5px; flex-grow: 1; overflow-y: auto;">
+                        <div style="margin-bottom: 8px; font-weight: bold;">Настройки:</div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                            <div>
+                                <label style="display: block; font-size: 12px; margin-bottom: 2px;">Задержка сбора (мс)</label>
+                                <input type="number" id="harvestDelayInput" value="${this.settings.harvestDelay}" style="width: 100%; padding: 4px; background: #333; color: #fff; border: 1px solid #444; border-radius: 3px;">
+                            </div>
+                            <div>
+                                <label style="display: block; font-size: 12px; margin-bottom: 2px;">Задержка посадки (мс)</label>
+                                <input type="number" id="plantDelayInput" value="${this.settings.plantDelay}" style="width: 100%; padding: 4px; background: #333; color: #fff; border: 1px solid #444; border-radius: 3px;">
+                            </div>
+                            <div>
+                                <label style="display: block; font-size: 12px; margin-bottom: 2px;">Проверка прогресса (мс)</label>
+                                <input type="number" id="progressCheckInput" value="${this.settings.progressCheckInterval}" style="width: 100%; padding: 4px; background: #333; color: #fff; border: 1px solid #444; border-radius: 3px;">
+                            </div>
+                            <div>
+                                <label style="display: block; font-size: 12px; margin-bottom: 2px;">Задержка выбора (мс)</label>
+                                <input type="number" id="selectChangeInput" value="${this.settings.selectChangeDelay}" style="width: 100%; padding: 4px; background: #333; color: #fff; border: 1px solid #444; border-radius: 3px;">
+                            </div>
+                        </div>
+                        <div style="margin-top: 8px;">
+                            <label style="display: block; font-size: 12px; margin-bottom: 2px;">Порог покупки семян</label>
+                            <input type="number" id="seedThresholdInput" value="${this.settings.minSeedThreshold}" style="width: 100%; padding: 4px; background: #333; color: #fff; border: 1px solid #444; border-radius: 3px;">
+                        </div>
+                        <div style="display: flex; align-items: center; margin-top: 8px;">
+                            <input type="checkbox" id="buySeedsCheckbox" ${this.settings.buySeedsEnabled ? 'checked' : ''} style="margin-right: 5px;">
+                            <label for="buySeedsCheckbox" style="font-size: 12px;">Авто-покупка семян</label>
+                        </div>
+                        <button id="saveSettingsBtn" style="width: 100%; margin-top: 8px; background: #4CAF50; color: #fff; border: none; padding: 6px; border-radius: 4px; cursor: pointer;">Сохранить настройки</button>
+                    </div>
+                    <div id="harvestStatus" style="font-size: 12px; color: #4CAF50; text-align: center; padding: 5px; background: #1e1e1e; border-radius: 4px; flex-shrink: 0;">
+                        Готов к работе
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(controls);
+
+            this.constrainPanelToWindow();
+        }
+
+        setupEventListeners() {
+            const controls = document.getElementById('harvestBotControls');
+            if (!controls) return;
+
+            // Drag and drop implementation
+            const header = controls.querySelector('h3');
+            header.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return;
+                e.preventDefault();
+
+                this.isDragging = true;
+                const startX = e.clientX;
+                const startY = e.clientY;
+                const startLeft = controls.offsetLeft;
+                const startTop = controls.offsetTop;
+
+                function moveHandler(e) {
+                    if (!this.isDragging) return;
+                    const dx = e.clientX - startX;
+                    const dy = e.clientY - startY;
+
+                    let newLeft = startLeft + dx;
+                    let newTop = startTop + dy;
+
+                    // Constrain to window boundaries
+                    newLeft = Math.max(0, Math.min(newLeft, window.innerWidth - controls.offsetWidth));
+                    newTop = Math.max(0, Math.min(newTop, window.innerHeight - controls.offsetHeight));
+
+                    controls.style.left = `${newLeft}px`;
+                    controls.style.top = `${newTop}px`;
+                    controls.style.right = 'auto';
+                    controls.style.bottom = 'auto';
+
+                    localStorage.setItem('farmRpgBot_panelPosition', JSON.stringify({
+                        left: controls.style.left,
+                        top: controls.style.top,
+                        width: controls.style.width,
+                        height: controls.style.height
+                    }));
+                }
+
+                function upHandler() {
+                    this.isDragging = false;
+                    document.removeEventListener('mousemove', moveHandler);
+                    document.removeEventListener('mouseup', upHandler);
+                }
+
+                document.addEventListener('mousemove', moveHandler.bind(this));
+                document.addEventListener('mouseup', upHandler.bind(this));
+            });
+
+            // Resize observer
+            controls.addEventListener('mousedown', (e) => {
+                if (e.target === controls) {
+                    this.isResizing = true;
+                    const startX = e.clientX;
+                    const startY = e.clientY;
+                    const startWidth = controls.offsetWidth;
+                    const startHeight = controls.offsetHeight;
+
+                    function resizeHandler(e) {
+                        if (!this.isResizing) return;
+                        const dx = e.clientX - startX;
+                        const dy = e.clientY - startY;
+
+                        let newWidth = startWidth + dx;
+                        let newHeight = startHeight + dy;
+
+                        // Minimum size constraints
+                        newWidth = Math.max(300, Math.min(newWidth, window.innerWidth - controls.offsetLeft));
+                        newHeight = Math.max(200, Math.min(newHeight, window.innerHeight - controls.offsetTop));
+
+                        controls.style.width = `${newWidth}px`;
+                        controls.style.height = `${newHeight}px`;
+
+                        this.settings.panelWidth = newWidth;
+                        this.settings.panelHeight = newHeight;
+                        localStorage.setItem('farmRpgBot_settings', JSON.stringify(this.settings));
+                    }
+
+                    function resizeUpHandler() {
+                        this.isResizing = false;
+                        document.removeEventListener('mousemove', resizeHandler);
+                        document.removeEventListener('mouseup', resizeUpHandler);
+                    }
+
+                    document.addEventListener('mousemove', resizeHandler.bind(this));
+                    document.addEventListener('mouseup', resizeUpHandler.bind(this));
+                }
+            });
+
+            // Minimize button
+            document.getElementById('minimizeBtn').addEventListener('click', () => {
+                const content = document.getElementById('controlsContent');
+                const btn = document.getElementById('minimizeBtn');
+
+                if (content.style.display === 'none') {
+                    content.style.display = 'flex';
+                    btn.textContent = '−';
+                } else {
+                    content.style.display = 'none';
+                    btn.textContent = '+';
+                }
+            });
+
+            // Close button
+            document.getElementById('closeBtn').addEventListener('click', () => {
+                this.stopProgressCheck();
+                const controls = document.getElementById('harvestBotControls');
+                if (controls) {
+                    controls.remove();
+                }
+            });
+
+            // Event listeners
+            document.getElementById('toggleAutoHarvest').addEventListener('click', () => {
+                this.isAutoHarvestEnabled = !this.isAutoHarvestEnabled;
+                const button = document.getElementById('toggleAutoHarvest');
+                button.style.backgroundColor = this.isAutoHarvestEnabled ? '#4CAF50' : '#555';
+                button.textContent = this.isAutoHarvestEnabled ? '🌾 Auto Harvest (ON)' : '🌾 Auto Harvest';
+                if (this.isAutoHarvestEnabled) {
+                    this.startProgressCheck();
+                    this.updateStatus('Авто-сбор включен');
+                } else {
+                    this.stopProgressCheck();
+                    this.updateStatus('Авто-сбор выключен');
+                }
+            });
+
+            // Buy seeds button
+            document.getElementById('buySeedsBtn').addEventListener('click', () => {
+                this.buyAllSeeds();
+            });
+
+            document.getElementById('selectAllCrops').addEventListener('click', () => {
+                const seedSelect = document.querySelector('.seedid.inlineinputlg');
+                if (seedSelect) {
+                    const options = seedSelect.querySelectorAll('option');
+                    this.selectedCrops = Array.from(options)
+                        .filter(option => option.value !== "0" && option.value !== "238")
+                        .map(option => option.value);
+                    this.saveSelectedCrops();
+                    this.updateCropList();
+                    this.updateStatus('Выбраны все культуры');
+                }
+            });
+
+            document.getElementById('deselectAllCrops').addEventListener('click', () => {
+                this.selectedCrops = [];
+                this.saveSelectedCrops();
+                this.updateCropList();
+                this.updateStatus('Сняты все культуры');
+            });
+
+            // Settings save
+            document.getElementById('saveSettingsBtn').addEventListener('click', () => {
+                this.settings = {
+                    ...this.settings,
+                    harvestDelay: parseInt(document.getElementById('harvestDelayInput').value) || DEFAULT_SETTINGS.harvestDelay,
+                    plantDelay: parseInt(document.getElementById('plantDelayInput').value) || DEFAULT_SETTINGS.plantDelay,
+                    progressCheckInterval: parseInt(document.getElementById('progressCheckInput').value) || DEFAULT_SETTINGS.progressCheckInterval,
+                    selectChangeDelay: parseInt(document.getElementById('selectChangeInput').value) || DEFAULT_SETTINGS.selectChangeDelay,
+                    maxRetries: DEFAULT_SETTINGS.maxRetries,
+                    minSeedThreshold: parseInt(document.getElementById('seedThresholdInput').value) || DEFAULT_SETTINGS.minSeedThreshold,
+                    buySeedsEnabled: document.getElementById('buySeedsCheckbox').checked,
+                    panelWidth: this.settings.panelWidth,
+                    panelHeight: this.settings.panelHeight
+                };
+                localStorage.setItem('farmRpgBot_settings', JSON.stringify(this.settings));
+                this.updateStatus('Настройки сохранены');
+            });
+
+            // Window resize handler
+            window.addEventListener('resize', () => {
+                this.constrainPanelToWindow();
+            });
+        }
+
+        constrainPanelToWindow() {
+            const controls = document.getElementById('harvestBotControls');
+            if (!controls) return;
+
+            const rect = controls.getBoundingClientRect();
+            let left = parseInt(controls.style.left) || window.innerWidth - rect.width - 10;
+            let top = parseInt(controls.style.top) || 10;
+
+            // Constrain to window boundaries
+            left = Math.max(0, Math.min(left, window.innerWidth - rect.width));
+            top = Math.max(0, Math.min(top, window.innerHeight - rect.height));
+
+            controls.style.left = `${left}px`;
+            controls.style.top = `${top}px`;
+            controls.style.right = 'auto';
+            controls.style.bottom = 'auto';
+        }
+
+        restorePanelPosition() {
+            const controls = document.getElementById('harvestBotControls');
+            if (!controls) return;
+
+            const savedPosition = JSON.parse(localStorage.getItem('farmRpgBot_panelPosition')) || {};
+            if (savedPosition.left && savedPosition.top) {
+                controls.style.left = savedPosition.left;
+                controls.style.top = savedPosition.top;
+                controls.style.right = 'auto';
+                controls.style.bottom = 'auto';
+            }
+
+            if (savedPosition.width) {
+                controls.style.width = savedPosition.width;
+                this.settings.panelWidth = parseInt(savedPosition.width);
+            }
+
+            if (savedPosition.height) {
+                controls.style.height = savedPosition.height;
+                this.settings.panelHeight = parseInt(savedPosition.height);
+            }
+
+            this.constrainPanelToWindow();
+        }
+
+        updateStatus(message, isError = false) {
+            const statusElement = document.getElementById('harvestStatus');
+            if (statusElement) {
+                statusElement.textContent = message;
+                statusElement.style.color = isError ? '#F44336' : '#4CAF50';
+                statusElement.style.backgroundColor = isError ? '#2a1a1a' : '#1e1e1e';
+            }
+        }
+
+        async waitForElement(selector, timeout = 5000) {
+            const startTime = Date.now();
+            while (Date.now() - startTime < timeout) {
+                const element = document.querySelector(selector);
+                if (element) return element;
+                await this.delay(100);
+            }
+            return null;
+        }
+
+        delay(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        loadCropList() {
+            const seedSelect = document.querySelector('.seedid.inlineinputlg');
+            if (!seedSelect) {
+                setTimeout(() => this.loadCropList(), 1000);
+                return;
+            }
+
+            const cropListContainer = document.getElementById('cropListContainer');
+            if (!cropListContainer) return;
+
+            cropListContainer.innerHTML = '';
+
+            const options = Array.from(seedSelect.querySelectorAll('option'))
+                .filter(option => option.value !== "0" && option.value !== "238")
+                .sort((a, b) => {
+                    const timeA = parseInt(a.getAttribute('data-ym')) || 0;
+                    const timeB = parseInt(b.getAttribute('data-ym')) || 0;
+                    return timeA - timeB;
+                });
+
+            // Use event delegation instead of individual handlers
+            cropListContainer.addEventListener('change', (e) => {
+                if (e.target.classList.contains('crop-checkbox')) {
+                    const value = e.target.dataset.value;
+                    if (e.target.checked) {
+                        if (!this.selectedCrops.includes(value)) {
+                            this.selectedCrops.push(value);
+                        }
+                    } else {
+                        this.selectedCrops = this.selectedCrops.filter(id => id !== value);
+                    }
+                    this.saveSelectedCrops();
+                    this.updateStatus(`Обновлен выбор культур: ${this.selectedCrops.length} выбрано`);
+
+                    // Update visual selection
+                    const item = e.target.closest('div');
+                    if (item) {
+                        item.style.backgroundColor = e.target.checked ? '#333' : 'transparent';
+                    }
+                }
+            });
+
+            cropListContainer.addEventListener('click', (e) => {
+                if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'LABEL') {
+                    const checkbox = e.target.closest('div')?.querySelector('.crop-checkbox');
+                    if (checkbox) {
+                        checkbox.checked = !checkbox.checked;
+                        checkbox.dispatchEvent(new Event('change'));
+                    }
+                }
+            });
+
+            options.forEach(option => {
+                const cropName = option.textContent.split('(')[0].trim();
+                const cropId = option.value;
+                const isSelected = this.selectedCrops.includes(cropId);
+
+                const cropItem = document.createElement('div');
+                cropItem.style.display = 'flex';
+                cropItem.style.alignItems = 'center';
+                cropItem.style.marginBottom = '3px';
+                cropItem.style.padding = '3px 5px';
+                cropItem.style.borderRadius = '3px';
+                cropItem.style.backgroundColor = isSelected ? '#333' : 'transparent';
+                cropItem.style.cursor = 'pointer';
+                cropItem.innerHTML = `
+                    <input type="checkbox" class="crop-checkbox"
+                           data-value="${cropId}" ${isSelected ? 'checked' : ''}
+                           style="margin-right: 5px; cursor: pointer;">
+                    <span style="flex-grow: 1; font-size: 13px;">
+                        ${cropName}
+                    </span>
+                `;
+                cropListContainer.appendChild(cropItem);
+            });
+        }
+
+        updateCropList() {
+            this.loadCropList();
+        }
+
+        saveSelectedCrops() {
+            localStorage.setItem('farmRpgBot_selectedCrops', JSON.stringify(this.selectedCrops));
+        }
+
+        startProgressCheck() {
+            this.stopProgressCheck();
+            this.checkProgress();
+        }
+
+        stopProgressCheck() {
+            if (this.checkInterval) {
+                clearInterval(this.checkInterval);
+                this.checkInterval = null;
+            }
+        }
+
+        async checkProgress() {
+            if (!this.isAutoHarvestEnabled) return;
+
+            try {
+                const progressBar = await this.waitForElement('.c-progress-bar-fill.pb32');
+
+                if (progressBar) {
+                    const width = progressBar.style.width;
+                    const currentProgress = parseFloat(width) || 0;
+
+                    if (currentProgress !== this.lastProgress) {
+                        this.lastProgress = currentProgress;
+                        this.updateStatus(`Прогресс: ${Math.round(currentProgress)}%`);
+                    }
+
+                    if (currentProgress >= 100) {
+                        await this.harvestAndPlant();
+                    } else {
+                        this.checkInterval = setTimeout(() => this.checkProgress(), this.settings.progressCheckInterval);
+                    }
+                } else {
+                    await this.checkFarmState();
+                }
+            } catch (error) {
+                console.error('Progress check error:', error);
+                this.updateStatus('Ошибка проверки прогресса', true);
+                this.checkInterval = setTimeout(() => this.checkProgress(), this.settings.progressCheckInterval);
+            }
+        }
+
+        async checkFarmState() {
+            try {
+                const growingCrops = await this.waitForElement('.cropitem[style*="opacity: 0.7"]', 2000);
+                if (!growingCrops) {
+                    this.updateStatus('Грядки пустые, начинаем посадку');
+                    await this.plantSelectedCrops();
+                } else {
+                    this.updateStatus('Урожай растет...');
+                    this.checkInterval = setTimeout(() => this.checkProgress(), this.settings.progressCheckInterval);
+                }
+            } catch (error) {
+                console.error('Farm state check error:', error);
+                this.updateStatus('Ошибка проверки грядок', true);
+                this.checkInterval = setTimeout(() => this.checkProgress(), this.settings.progressCheckInterval);
+            }
+        }
+
+        async harvestAndPlant() {
+            try {
+                const harvestButton = await this.waitForElement('.harvestallbtn:not([disabled])', 3000);
+                if (!harvestButton) {
+                    throw new Error('Harvest button not found or disabled');
+                }
+
+                harvestButton.click();
+                this.updateStatus('Собираем урожай...');
+
+                await this.delay(this.settings.harvestDelay);
+                await this.plantSelectedCrops();
+
+            } catch (error) {
+                console.error('Harvest error:', error);
+                this.currentRetries++;
+                this.updateStatus(`Ошибка (попытка ${this.currentRetries}/${this.settings.maxRetries})`, true);
+
+                if (this.currentRetries < this.settings.maxRetries) {
+                    await this.delay(this.settings.harvestDelay);
+                    await this.harvestAndPlant();
+                } else {
+                    this.currentRetries = 0;
+                    this.checkProgress();
+                }
+            }
+        }
+
+        async plantSelectedCrops() {
+            try {
+                if (this.selectedCrops.length === 0) {
+                    this.updateStatus('Нет выбранных культур для посадки', true);
+                    this.checkProgress();
+                    return;
+                }
+
+                const seedSelect = await this.waitForElement('.seedid.inlineinputlg', 3000);
+                if (!seedSelect) {
+                    throw new Error('Seed select not found');
+                }
+
+                // Ищем доступные культуры с проверкой количества
+                const availableCrops = [];
+                const options = Array.from(seedSelect.querySelectorAll('option'));
+
+                for (const option of options) {
+                    const cropName = option.textContent.split('(')[0].trim();
+                    if (!cropName.includes('*') &&
+                        this.selectedCrops.includes(option.value) &&
+                        option.value !== "0" &&
+                        option.value !== "238") {
+
+                        // Проверяем есть ли семена в инвентаре
+                        const match = option.textContent.match(/\((\d+)\)/);
+                        const inventoryCount = match ? parseInt(match[1]) : 0;
+
+                        availableCrops.push({
+                            id: option.value,
+                            name: cropName,
+                            time: parseInt(option.getAttribute('data-ym')) || 0,
+                            inventoryCount: inventoryCount
+                        });
+                    }
+                }
+
+                if (availableCrops.length === 0) {
+                    this.updateStatus('Нет доступных культур без звездочки', true);
+                    this.checkProgress();
+                    return;
+                }
+
+                // Сортируем по времени роста
+                availableCrops.sort((a, b) => a.time - b.time);
+
+                // Если есть культуры с недостатком семян и включена авто-покупка
+                if (this.settings.buySeedsEnabled) {
+                    const cropsNeedingPurchase = availableCrops.filter(crop =>
+                        crop.inventoryCount <= this.settings.minSeedThreshold
+                    );
+
+                    if (cropsNeedingPurchase.length > 0) {
+                        this.updateStatus('Недостаточно семян (автопокупка включена)', true);
+                        return;
+                    }
+                }
+
+                // Ищем первую культуру с достаточным количеством семян
+                let cropToPlant = availableCrops.find(crop => crop.inventoryCount > 0);
+
+                if (!cropToPlant) {
+                    this.updateStatus('Нет семян для посадки', true);
+                    this.checkProgress();
+                    return;
+                }
+
+                // Обычный процесс посадки
+                const cropName = cropToPlant.name;
+                seedSelect.click();
+                await this.delay(100);
+
+                const optionToSelect = seedSelect.querySelector(`option[value="${cropToPlant.id}"]`);
+                if (optionToSelect) {
+                    seedSelect.value = cropToPlant.id;
+                    seedSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                    this.updateStatus(`Выбрана культура: ${cropName} (остаток: ${cropToPlant.inventoryCount})`);
+
+                    await this.delay(this.settings.selectChangeDelay);
+
+                    const plantAllButton = await this.waitForElement('.plantallbtn:not([disabled])', 2000);
+                    if (plantAllButton) {
+                        plantAllButton.click();
+                        this.updateStatus(`Посажена культура: ${cropName}`);
+                    }
+                }
+
+                this.currentRetries = 0;
+                this.checkProgress();
+            } catch (error) {
+                console.error('Planting error:', error);
+                this.updateStatus('Ошибка при посадке', true);
+                this.checkProgress();
+            }
+        }
+
+        async buyAllSeeds() {
+            try {
+                if (this.selectedCrops.length === 0) {
+                    this.updateStatus('Нет выбранных культур для покупки', true);
+                    return;
+                }
+
+                const seedSelect = await this.waitForElement('.seedid.inlineinputlg');
+                if (!seedSelect) {
+                    throw new Error('Seed select not found');
+                }
+
+                // Получаем список выбранных культур
+                const options = Array.from(seedSelect.querySelectorAll('option'));
+                const selectedCropsInfo = options
+                    .filter(option => this.selectedCrops.includes(option.value))
+                    .map(option => {
+                        const cropName = option.textContent.split('(')[0].trim();
+                        const match = option.textContent.match(/\((\d+)\)/);
+                        const inventoryCount = match ? parseInt(match[1]) : 0;
+                        return {
+                            id: option.value,
+                            name: cropName,
+                            inventoryCount: inventoryCount
+                        };
+                    });
+
+                if (selectedCropsInfo.length === 0) {
+                    this.updateStatus('Нет информации о выбранных культурах', true);
+                    return;
+                }
+
+                // Находим кнопки покупки семян на странице магазина
+                const buyButtons = Array.from(document.querySelectorAll('.buybtnnc'));
+                if (buyButtons.length === 0) {
+                    this.updateStatus('Перейдите на страницу магазина семян', true);
+                    return;
+                }
+
+                let purchasedAny = false;
+
+                // Покупаем семена для всех выбранных культур
+                for (const crop of selectedCropsInfo) {
+                    const buyButton = buyButtons.find(btn => btn.dataset.id === crop.id);
+                    if (!buyButton) continue;
+
+                    // Проверяем не полон ли инвентарь
+                    const invFullBtn = buyButton.closest('.item-after')?.querySelector('.btnred');
+                    if (invFullBtn) {
+                        this.updateStatus(`Инвентарь полон: ${crop.name}`, true);
+                        continue;
+                    }
+
+                    // Нажимаем +MAX
+                    const maxBtn = buyButton.closest('.item-after')?.previousElementSibling?.querySelector('.maxqty');
+                    if (maxBtn) {
+                        maxBtn.click();
+                        await this.delay(300);
+                    }
+
+                    // Нажимаем купить
+                    buyButton.click();
+                    this.updateStatus(`Покупаем семена: ${crop.name}`);
+                    purchasedAny = true;
+                    await this.delay(1000);
+                }
+
+                if (purchasedAny) {
+                    this.updateStatus('Покупка семян завершена');
+                } else {
+                    this.updateStatus('Нечего покупать или инвентарь полон', true);
+                }
+
+            } catch (error) {
+                console.error('Buy seeds error:', error);
+                this.updateStatus('Ошибка при покупке семян', true);
+            }
+        }
+    }
+
+    // Запуск скрипта
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        setTimeout(() => new PrecisionHarvestBot(), 1000);
+    } else {
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(() => new PrecisionHarvestBot(), 1000);
+        });
+    }
+})();

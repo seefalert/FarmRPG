@@ -1,0 +1,192 @@
+// ==UserScript==
+// @name         Farm RPG Fishing Bot
+// @namespace    http://tampermonkey.net/
+// @version      1.0
+// @description  Авто-рыбалка для Farm RPG
+// @author       Your Name
+// @match        https://farmrpg.com/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    const SETTINGS = {
+        catchDelay: 1500,
+        winDelay: 1500,
+        teaDelay: 1000
+    };
+
+    class FishingBot {
+        constructor() {
+            this.isAutoCatchEnabled = false;
+            this.icedTeaCount = 0;
+            this.controlsAdded = false;
+            this.init();
+        }
+
+        init() {
+            this.addControls();
+        }
+
+        addControls() {
+            if (this.controlsAdded) return;
+            this.controlsAdded = true;
+
+            const controls = document.createElement('div');
+            controls.id = 'fishingBotControls';
+            controls.innerHTML = `
+                <div style="position: fixed; bottom: 10px; right: 10px; z-index: 9999; background: #1e1e1e; padding: 10px; border: 1px solid #444; border-radius: 8px; color: #fff; font-family: Arial, sans-serif; width: 250px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <h3 style="margin: 0; font-size: 16px;">Fishing Bot</h3>
+                    </div>
+                    <div>
+                        <button id="toggleAutoCatch" style="width: 100%; background: #555; color: #fff; border: none; padding: 8px; border-radius: 4px; cursor: pointer; margin-bottom: 5px;">
+                            🎣 Auto Catch
+                        </button>
+                        <div id="fishingStatus" style="font-size: 12px; color: #4CAF50; text-align: center;">
+                            Готов к работе
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(controls);
+
+            // Drag and drop
+            let isDragging = false;
+            let offsetX, offsetY;
+            controls.addEventListener('mousedown', (e) => {
+                if (e.target.tagName !== 'BUTTON') {
+                    isDragging = true;
+                    offsetX = e.clientX - controls.getBoundingClientRect().left;
+                    offsetY = e.clientY - controls.getBoundingClientRect().top;
+                    controls.style.cursor = 'grabbing';
+                }
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (isDragging) {
+                    controls.style.left = `${e.clientX - offsetX}px`;
+                    controls.style.top = `${e.clientY - offsetY}px`;
+                }
+            });
+
+            document.addEventListener('mouseup', () => {
+                isDragging = false;
+                controls.style.cursor = 'default';
+            });
+
+            // Event listener
+            document.getElementById('toggleAutoCatch').addEventListener('click', () => {
+                this.isAutoCatchEnabled = !this.isAutoCatchEnabled;
+                const button = document.getElementById('toggleAutoCatch');
+                button.style.backgroundColor = this.isAutoCatchEnabled ? '#333' : '#555';
+                button.textContent = this.isAutoCatchEnabled ? '🎣 Auto Catch (ON)' : '🎣 Auto Catch';
+                if (this.isAutoCatchEnabled) {
+                    this.startAutoCatch();
+                    this.updateStatus('Авто-ловля включена');
+                } else {
+                    this.updateStatus('Авто-ловля выключена');
+                }
+            });
+        }
+
+        updateStatus(message, isError = false) {
+            const statusElement = document.getElementById('fishingStatus');
+            if (statusElement) {
+                statusElement.textContent = message;
+                statusElement.style.color = isError ? '#F44336' : '#4CAF50';
+            }
+        }
+
+        startAutoCatch() {
+            if (!this.isAutoCatchEnabled) return;
+
+            try {
+                const baitLeft = document.getElementById('baitleft');
+                if (baitLeft && parseInt(baitLeft.textContent, 10) <= 0) {
+                    this.isAutoCatchEnabled = false;
+                    document.getElementById('toggleAutoCatch').style.backgroundColor = '#555';
+                    document.getElementById('toggleAutoCatch').textContent = '🎣 Auto Catch';
+                    this.updateStatus('Закончилась приманка', true);
+                    return;
+                }
+
+                const fishElements = document.querySelectorAll('.fish[style*="display: inline"]');
+                let fishToClick = null;
+
+                fishElements.forEach(fish => {
+                    const opacity = parseFloat(fish.style.opacity);
+                    if (opacity > 0) {
+                        fishToClick = fish;
+                        return;
+                    }
+                });
+
+                if (fishToClick) {
+                    fishToClick.click();
+                    this.startAutoWin();
+                }
+            } catch (error) {
+                console.error('Ошибка при ловле рыбы:', error);
+                this.updateStatus('Ошибка при ловле рыбы', true);
+            }
+
+            setTimeout(() => this.startAutoCatch(), SETTINGS.catchDelay);
+        }
+
+        startAutoWin() {
+            setTimeout(() => {
+                try {
+                    const miniGame = document.querySelector('.picker-modal.picker-catch.modal-in[style*="display: block"]');
+                    if (miniGame) {
+                        const fish = miniGame.querySelector('.fishcaught');
+                        if (fish) {
+                            const clickEvent = new MouseEvent('click', {
+                                bubbles: true,
+                                cancelable: true,
+                                view: window
+                            });
+                            fish.dispatchEvent(clickEvent);
+                            this.checkIcedTea();
+                        }
+                    }
+                } catch (error) {
+                    console.error('Ошибка при выигрыше в мини-игре:', error);
+                    this.updateStatus('Ошибка в мини-игре', true);
+                }
+            }, SETTINGS.winDelay);
+        }
+
+        checkIcedTea() {
+            setTimeout(() => {
+                try {
+                    const icedTeaButton = document.querySelector('.drinkicedteabtn');
+                    if (icedTeaButton) {
+                        icedTeaButton.click();
+                        setTimeout(() => {
+                            const confirmButton = document.querySelector('.actions-modal-button');
+                            if (confirmButton) {
+                                confirmButton.click();
+                                this.icedTeaCount++;
+                                this.updateStatus(`Использовано чая: ${this.icedTeaCount}`);
+                            }
+                        }, SETTINGS.teaDelay);
+                    }
+                } catch (error) {
+                    console.error('Ошибка при использовании чая:', error);
+                    this.updateStatus('Ошибка с чаем', true);
+                }
+            }, SETTINGS.teaDelay);
+        }
+    }
+
+    // Запуск скрипта
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        setTimeout(() => new FishingBot(), 1000);
+    } else {
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(() => new FishingBot(), 1000);
+        });
+    }
+})();

@@ -1,0 +1,144 @@
+// ==UserScript==
+// @name         Farm RPG Explore Bot
+// @namespace    http://tampermonkey.net/
+// @version      1.0
+// @description  Авто-исследование для Farm RPG
+// @author       Your Name
+// @match        https://farmrpg.com/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    const SETTINGS = {
+        exploreInterval: { min: 70, max: 95 }
+    };
+
+    class ExploreBot {
+        constructor() {
+            this.isAutoExploreEnabled = false;
+            this.controlsAdded = false;
+            this.init();
+        }
+
+        init() {
+            this.addControls();
+        }
+
+        addControls() {
+            if (this.controlsAdded) return;
+            this.controlsAdded = true;
+
+            const controls = document.createElement('div');
+            controls.id = 'exploreBotControls';
+            controls.innerHTML = `
+                <div style="position: fixed; bottom: 120px; right: 10px; z-index: 9999; background: #1e1e1e; padding: 10px; border: 1px solid #444; border-radius: 8px; color: #fff; font-family: Arial, sans-serif; width: 250px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <h3 style="margin: 0; font-size: 16px;">Explore Bot</h3>
+                    </div>
+                    <div>
+                        <button id="toggleAutoExplore" style="width: 100%; background: #555; color: #fff; border: none; padding: 8px; border-radius: 4px; cursor: pointer; margin-bottom: 5px;">
+                            🦶 Auto Explore
+                        </button>
+                        <div id="exploreStatus" style="font-size: 12px; color: #4CAF50; text-align: center;">
+                            Готов к работе
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(controls);
+
+            // Drag and drop
+            let isDragging = false;
+            let offsetX, offsetY;
+            controls.addEventListener('mousedown', (e) => {
+                if (e.target.tagName !== 'BUTTON') {
+                    isDragging = true;
+                    offsetX = e.clientX - controls.getBoundingClientRect().left;
+                    offsetY = e.clientY - controls.getBoundingClientRect().top;
+                    controls.style.cursor = 'grabbing';
+                }
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (isDragging) {
+                    controls.style.left = `${e.clientX - offsetX}px`;
+                    controls.style.top = `${e.clientY - offsetY}px`;
+                }
+            });
+
+            document.addEventListener('mouseup', () => {
+                isDragging = false;
+                controls.style.cursor = 'default';
+            });
+
+            // Event listener
+            document.getElementById('toggleAutoExplore').addEventListener('click', () => {
+                this.isAutoExploreEnabled = !this.isAutoExploreEnabled;
+                const button = document.getElementById('toggleAutoExplore');
+                button.style.backgroundColor = this.isAutoExploreEnabled ? '#333' : '#555';
+                button.textContent = this.isAutoExploreEnabled ? '🦶 Auto Explore (ON)' : '🦶 Auto Explore';
+                if (this.isAutoExploreEnabled) {
+                    this.startAutoExplore();
+                    this.updateStatus('Авто-исследование включено');
+                } else {
+                    this.updateStatus('Авто-исследование выключено');
+                }
+            });
+        }
+
+        updateStatus(message, isError = false) {
+            const statusElement = document.getElementById('exploreStatus');
+            if (statusElement) {
+                statusElement.textContent = message;
+                statusElement.style.color = isError ? '#F44336' : '#4CAF50';
+            }
+        }
+
+        startAutoExplore() {
+            const explore = () => {
+                if (!this.isAutoExploreEnabled) return;
+
+                try {
+                    const grayscaleElement = document.querySelector('[style*="filter: grayscale(100%)"]');
+                    if (grayscaleElement) {
+                        this.isAutoExploreEnabled = false;
+                        document.getElementById('toggleAutoExplore').style.backgroundColor = '#555';
+                        document.getElementById('toggleAutoExplore').textContent = '🦶 Auto Explore';
+                        this.updateStatus('Исследование невозможно', true);
+                        return;
+                    }
+
+                    const exploreButton = document.querySelector('#exploreconsole');
+                    if (exploreButton) {
+                        const clickEvent = new MouseEvent('click', {
+                            bubbles: true,
+                            cancelable: true,
+                            view: window
+                        });
+                        exploreButton.dispatchEvent(clickEvent);
+                        this.updateStatus('Исследуем...');
+                    }
+                } catch (error) {
+                    console.error('Ошибка при исследовании:', error);
+                    this.updateStatus('Ошибка исследования', true);
+                }
+
+                const delay = Math.floor(Math.random() * (SETTINGS.exploreInterval.max - SETTINGS.exploreInterval.min + 1)) + SETTINGS.exploreInterval.min;
+                setTimeout(explore, delay);
+            };
+
+            explore();
+        }
+    }
+
+    // Запуск скрипта
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        setTimeout(() => new ExploreBot(), 1000);
+    } else {
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(() => new ExploreBot(), 1000);
+        });
+    }
+})();
